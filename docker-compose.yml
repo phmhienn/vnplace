@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: vnplace-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vnplace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vnplacepass}
+      POSTGRES_DB: ${POSTGRES_DB:-vnplace}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-vnplace} -d ${POSTGRES_DB:-vnplace}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: vnplace-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# (Tuỳ chọn) pgAdmin – GUI quản lý Postgres, bỏ comment nếu cần
+#  pgadmin:
+#    image: dpage/pgadmin4:8
+#    container_name: vnplace-pgadmin
+#    restart: unless-stopped
+#    environment:
+#      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@local}
+#      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+#    ports:
+#      - "${PGADMIN_PORT:-8080}:80"
+#    depends_on:
+#      - postgres
+
+volumes:
+  pgdata:
+  redisdata:
