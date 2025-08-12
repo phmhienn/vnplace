@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl, { Map } from "maplibre-gl";
 import io from "socket.io-client";
 import {
@@ -8,7 +8,6 @@ import {
   canvasToLonLat,
   canvasToRegionPixel,
   regionPixelToCanvas,
-  REGION_SIZE,
 } from "@/lib/mapping";
 
 const API = process.env.NEXT_PUBLIC_API_BASE!;
@@ -34,6 +33,11 @@ export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [colorId, setColorId] = useState(2); // mặc định đỏ
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
+  const pixelsRef = useRef<{ cx: number; cy: number; colorId: number }[]>([]);
+  const colorRef = useRef(colorId);
+  useEffect(() => {
+    colorRef.current = colorId;
+  }, [colorId]);
 
   // vẽ 1 ô vuông tại vị trí pixel màn hình
   function drawDot(screenX: number, screenY: number, color: string) {
@@ -42,6 +46,20 @@ export default function Home() {
     ctx.fillStyle = color;
     ctx.fillRect(screenX - 1, screenY - 1, 2, 2); // chấm nhỏ để test realtime
   }
+
+  // vẽ lại toàn bộ các pixel theo vị trí hiện tại của map
+  const redraw = useCallback(() => {
+    if (!mapRef.current || !canvasRef.current) return;
+    const map = mapRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (const { cx, cy, colorId } of pixelsRef.current) {
+      const { lon, lat } = canvasToLonLat(cx, cy);
+      const p = map.project([lon, lat]);
+      drawDot(p.x, p.y, PALETTE[colorId % PALETTE.length]);
+    }
+  }, []);
 
   useEffect(() => {
     const map = new maplibregl.Map({
@@ -67,6 +85,7 @@ export default function Home() {
       const rect = (map.getContainer() as HTMLElement).getBoundingClientRect();
       canvas.width = rect.width;
       canvas.height = rect.height;
+      redraw();
     }
     map.on("resize", resizeCanvas);
     map.on("load", resizeCanvas);
@@ -76,11 +95,10 @@ export default function Home() {
     socketRef.current = s;
     s.on("connect", () => console.log("socket connected"));
     s.on("pixel:painted", ({ rx, ry, px, py, colorId }) => {
-      // chuyển rx,ry,px,py -> cx,cy -> lon,lat -> screen
+      // chuyển rx,ry,px,py -> cx,cy -> vẽ và lưu lại
       const { cx, cy } = regionPixelToCanvas(rx, ry, px, py);
-      const { lon, lat } = canvasToLonLat(cx, cy);
-      const p = map.project([lon, lat]);
-      drawDot(p.x, p.y, PALETTE[colorId % PALETTE.length]);
+      pixelsRef.current.push({ cx, cy, colorId });
+      redraw();
     });
 
     map.on("click", async (e) => {
@@ -95,12 +113,12 @@ export default function Home() {
           "Content-Type": "application/json",
           "x-user-id": "demo-user-1",
         },
-        body: JSON.stringify({ coords: [px, py], colorId }),
+        body: JSON.stringify({ coords: [px, py], colorId: colorRef.current }),
       });
 
-      // 3) vẽ ngay local (không chờ socket)
-      const p = map.project([e.lngLat.lng, e.lngLat.lat]);
-      drawDot(p.x, p.y, PALETTE[colorId % PALETTE.length]);
+      // 3) vẽ ngay local (không chờ socket) và lưu lại
+      pixelsRef.current.push({ cx, cy, colorId: colorRef.current });
+      redraw();
 
       // 4) subscribe room region lần đầu
       socketRef.current?.emit("region:subscribe", { rx, ry });
@@ -110,22 +128,20 @@ export default function Home() {
       s.close();
       map.remove();
     };
-  }, []);
+  }, [redraw]);
 
   useEffect(() => {
     if (!mapRef.current || !canvasRef.current) return;
     const map = mapRef.current;
-    const canvas = canvasRef.current;
     const onMove = () => {
-      // xóa canvas khi pan/zoom để tránh ghost pixels
-      const ctx = canvas.getContext("2d")!;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // khi pan/zoom cần vẽ lại tất cả các pixel đã có
+      redraw();
     };
     map.on("move", onMove);
     return () => {
       map.off("move", onMove);
     };
-  }, []);
+  }, [redraw]);
 
   return (
     <div style={{ height: "100vh", position: "relative" }}>
